@@ -1,0 +1,212 @@
+! ============================================================
+! ANSYS APDL: Two-layer transient thermal — IMPERFECT CONTACT
+! Rc = 1e-4 m²·K/W modeled as equivalent thin resistance layer
+!
+! The contact resistance is represented by a thin solid layer
+! with conductivity k_layer = delta / Rc and negligible thermal
+! mass (rho=1, cp=1). This is mathematically equivalent to a
+! discrete interface resistance for transient problems when the
+! layer time constant is << all physical time scales.
+!
+! Layer time constant: tau = rho*cp*delta^2/k = 1e-8 s (negligible)
+!
+! Parameters match the PINN codebase EXACTLY:
+!   q_in = 50000 W/m2, h = 50 W/(m2K), T_inf = 300 K
+!   Al: k=205, rho=2700, cp=900
+!   SS304: k=16, rho=8000, cp=500
+!   Rc = 1e-4 m²·K/W
+!   Domain: 5mm Al + 0.1mm layer + 5mm SS304 = 10.1mm
+! ============================================================
+
+/CLEAR,START
+/PREP7
+/TITLE, Two-Layer Transient - Imperfect Contact Rc=1e-4
+
+! --- Element Type ---
+ET,1,PLANE55
+KEYOPT,1,3,0
+
+! --- Material 1: Aluminum ---
+MP,KXX,1,205
+MP,DENS,1,2700
+MP,C,1,900
+
+! --- Material 2: Stainless Steel 304 ---
+MP,KXX,2,16
+MP,DENS,2,8000
+MP,C,2,500
+
+! --- Material 3: Thin resistance layer ---
+! Rc = delta / k  =>  k = delta / Rc = 1e-4 / 1e-4 = 1.0 W/(m·K)
+! Thermal mass per unit area: rho*cp*delta = 1*1*1e-4 = 1e-4 J/(m²·K)
+! Compare Al thermal mass: 2700*900*0.005 = 12150 J/(m²·K)
+! Ratio = 8.2e-9 => completely negligible
+MP,KXX,3,1.0
+MP,DENS,3,1
+MP,C,3,1
+
+! --- Geometry ---
+! Create each area separately, mesh each, then merge nodes
+! Layer 1 (Al): x = 0 to 0.005 m
+RECTNG,0,0.005,0,0.001
+
+! Assign material 1 to Al area
+ASEL,S,LOC,X,0.002,0.003
+AATT,1,,1
+ESIZE,0.0001
+AMESH,ALL
+ALLSEL,ALL
+
+! Layer 2 (Resistance): x = 0.005 to 0.0051 m (0.1 mm thick)
+RECTNG,0.005,0.0051,0,0.001
+
+! Assign material 3 to resistance layer
+ASEL,S,LOC,X,0.00504,0.00506
+AATT,3,,1
+ESIZE,0.0001
+AMESH,ALL
+ALLSEL,ALL
+
+! Layer 3 (SS304): x = 0.0051 to 0.0101 m
+RECTNG,0.0051,0.0101,0,0.001
+
+! Assign material 2 to SS area
+ASEL,S,LOC,X,0.007,0.008
+AATT,2,,1
+ESIZE,0.0001
+AMESH,ALL
+ALLSEL,ALL
+
+! Merge coincident nodes at material boundaries
+NUMMRG,NODE,1e-6
+
+FINISH
+
+! --- Solution ---
+/SOLU
+ANTYPE,TRANSIENT
+TRNOPT,FULL
+TIME,10
+DELTIM,0.01,0.001,0.1
+AUTOTS,ON
+KBC,1
+
+! Initial temperature
+ALLSEL,ALL
+IC,ALL,TEMP,300
+
+! BC: Heat flux on left face (x=0) — q = 50000 W/m2
+NSEL,S,LOC,X,-1e-6,1e-6
+SF,ALL,HFLUX,50000
+ALLSEL,ALL
+
+! BC: Convection on right face (x=10.1mm) — h = 50 W/(m2K), T_inf = 300K
+NSEL,S,LOC,X,0.01009,0.01011
+SF,ALL,CONV,50,300
+ALLSEL,ALL
+
+OUTRES,ALL,ALL
+SOLVE
+FINISH
+
+! --- Post-processing: full field at last time step ---
+/POST1
+SET,LAST
+PLNSOL,TEMP
+FINISH
+
+! --- Time history at sensor locations ---
+/POST26
+
+! Sensor at x = 2 mm (in Al layer)
+NSOL,2,NODE(0.002,0.0005,0),TEMP,,T_2mm
+
+! Sensor at x = 4 mm (in Al layer)
+NSOL,3,NODE(0.004,0.0005,0),TEMP,,T_4mm
+
+! Interface — Al side (x = 5.0 mm, right boundary of Al)
+NSOL,4,NODE(0.005,0.0005,0),TEMP,,T_intAl
+
+! Interface — SS side (x = 5.1 mm, left boundary of SS304)
+NSOL,5,NODE(0.0051,0.0005,0),TEMP,,T_intSS
+
+! Sensor at x = 6 mm equivalent (x = 6.1 mm in shifted SS domain)
+NSOL,6,NODE(0.0071,0.0005,0),TEMP,,T_6mm
+
+! Sensor at x = 8 mm equivalent (x = 8.1 mm in shifted SS domain)
+NSOL,7,NODE(0.0091,0.0005,0),TEMP,,T_8mm
+
+PLVAR,2,3,4,5,6,7
+
+! --- Export full time history ---
+/OUTPUT,'C:\Users\muham\Desktop\ansys_imperfect_results','txt'
+*MSG,INFO
+ANSYS Imperfect Contact Validation Results
+*MSG,INFO
+q_in = 50000   h = 50   T_inf = 300   Rc = 1e-4 m2K/W
+*MSG,INFO
+Al: k=205 rho=2700 cp=900 | SS304: k=16 rho=8000 cp=500
+*MSG,INFO
+Thin layer: delta=0.1mm k=1.0 rho=1 cp=1
+*MSG,INFO
+Columns: TIME T_2mm T_4mm T_intAl T_intSS T_6mm T_8mm
+PRVAR,2,3,4,5,6,7
+/OUTPUT
+
+! --- Also extract values at specific times for comparison table ---
+/POST1
+SET,NEAR,,,,,,,0.5
+/OUTPUT,'C:\Users\muham\Desktop\ansys_imperfect_snapshots','txt'
+*MSG,INFO
+=== SNAPSHOT at t = 0.5 s ===
+*GET,T2_05,NODE,NODE(0.002,0.0005,0),TEMP
+*GET,T4_05,NODE,NODE(0.004,0.0005,0),TEMP
+*GET,TAl_05,NODE,NODE(0.005,0.0005,0),TEMP
+*GET,TSS_05,NODE,NODE(0.0051,0.0005,0),TEMP
+*GET,T6_05,NODE,NODE(0.0071,0.0005,0),TEMP
+*GET,T8_05,NODE,NODE(0.0091,0.0005,0),TEMP
+*VWRITE,T2_05,T4_05,TAl_05,TSS_05,T6_05,T8_05
+('t=0.5s: T2=',F10.4,' T4=',F10.4,' TintAl=',F10.4,' TintSS=',F10.4,' T6=',F10.4,' T8=',F10.4)
+
+SET,NEAR,,,,,,,1.0
+*GET,T2_10,NODE,NODE(0.002,0.0005,0),TEMP
+*GET,T4_10,NODE,NODE(0.004,0.0005,0),TEMP
+*GET,TAl_10,NODE,NODE(0.005,0.0005,0),TEMP
+*GET,TSS_10,NODE,NODE(0.0051,0.0005,0),TEMP
+*GET,T6_10,NODE,NODE(0.0071,0.0005,0),TEMP
+*GET,T8_10,NODE,NODE(0.0091,0.0005,0),TEMP
+*VWRITE,T2_10,T4_10,TAl_10,TSS_10,T6_10,T8_10
+('t=1.0s: T2=',F10.4,' T4=',F10.4,' TintAl=',F10.4,' TintSS=',F10.4,' T6=',F10.4,' T8=',F10.4)
+
+SET,NEAR,,,,,,,2.0
+*GET,T2_20,NODE,NODE(0.002,0.0005,0),TEMP
+*GET,T4_20,NODE,NODE(0.004,0.0005,0),TEMP
+*GET,TAl_20,NODE,NODE(0.005,0.0005,0),TEMP
+*GET,TSS_20,NODE,NODE(0.0051,0.0005,0),TEMP
+*GET,T6_20,NODE,NODE(0.0071,0.0005,0),TEMP
+*GET,T8_20,NODE,NODE(0.0091,0.0005,0),TEMP
+*VWRITE,T2_20,T4_20,TAl_20,TSS_20,T6_20,T8_20
+('t=2.0s: T2=',F10.4,' T4=',F10.4,' TintAl=',F10.4,' TintSS=',F10.4,' T6=',F10.4,' T8=',F10.4)
+
+SET,NEAR,,,,,,,5.0
+*GET,T2_50,NODE,NODE(0.002,0.0005,0),TEMP
+*GET,T4_50,NODE,NODE(0.004,0.0005,0),TEMP
+*GET,TAl_50,NODE,NODE(0.005,0.0005,0),TEMP
+*GET,TSS_50,NODE,NODE(0.0051,0.0005,0),TEMP
+*GET,T6_50,NODE,NODE(0.0071,0.0005,0),TEMP
+*GET,T8_50,NODE,NODE(0.0091,0.0005,0),TEMP
+*VWRITE,T2_50,T4_50,TAl_50,TSS_50,T6_50,T8_50
+('t=5.0s: T2=',F10.4,' T4=',F10.4,' TintAl=',F10.4,' TintSS=',F10.4,' T6=',F10.4,' T8=',F10.4)
+
+SET,LAST
+*GET,T2_100,NODE,NODE(0.002,0.0005,0),TEMP
+*GET,T4_100,NODE,NODE(0.004,0.0005,0),TEMP
+*GET,TAl_100,NODE,NODE(0.005,0.0005,0),TEMP
+*GET,TSS_100,NODE,NODE(0.0051,0.0005,0),TEMP
+*GET,T6_100,NODE,NODE(0.0071,0.0005,0),TEMP
+*GET,T8_100,NODE,NODE(0.0091,0.0005,0),TEMP
+*VWRITE,T2_100,T4_100,TAl_100,TSS_100,T6_100,T8_100
+('t=10s: T2=',F10.4,' T4=',F10.4,' TintAl=',F10.4,' TintSS=',F10.4,' T6=',F10.4,' T8=',F10.4)
+/OUTPUT
+
+FINISH
